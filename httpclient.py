@@ -26,6 +26,13 @@ import urllib.parse
 
 def help():
     print("httpclient.py [GET/POST] [URL]\n")
+    
+def get_remote_ip(host):
+    try:
+        remote_ip = socket.gethostbyname( host )
+    except socket.gaierror:
+        return 0
+    return remote_ip
 
 class HTTPResponse(object):
     def __init__(self, code=200, body=""):
@@ -36,6 +43,7 @@ class HTTPClient(object):
     #def get_host_port(self,url):
 
     def connect(self, host, port):
+        #print("Connecting")
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.connect((host, port))
         return None
@@ -50,31 +58,150 @@ class HTTPClient(object):
         return None
     
     def sendall(self, data):
+        #print("Sending")
         self.socket.sendall(data.encode('utf-8'))
         
     def close(self):
         self.socket.close()
 
     # read everything from the socket
-    def recvall(self, sock):
-        buffer = bytearray()
+    def recvall(self):
+        #print("Receiving..")
+        self.socket.settimeout(1)
+        fulldata = ''
         done = False
-        while not done:
-            part = sock.recv(1024)
-            if (part):
-                buffer.extend(part)
-            else:
-                done = not part
-        return buffer.decode('utf-8')
+        method = 'utf-8'
+        while(True):
+            data = None
+            try:
+                data = self.socket.recv(1024)
+            except Exception:
+                break
+            if not data:
+                break
+            decoded = data.decode(method)
+            fulldata += decoded
+            if "charset=" in decoded:
+                charset = decoded.index("charset=")
+                method = decoded[charset+8:decoded[charset:].index('\n')+charset]
+        return fulldata
 
     def GET(self, url, args=None):
-        code = 500
-        body = ""
+        body = ''
+        if '//' in url:
+            addr = urllib.parse.urlparse(url)
+            route = addr.netloc
+            if ':' in route:
+                route = route[:route.index(':')]
+            path = addr.path
+            if addr.port:
+                port = addr.port
+            else:
+                port = 80
+        else:
+            host = get_remote_ip(url)
+            route = url
+            port = 80
+            path = ''
+        try:
+            self.connect(route,port)
+        except Exception:
+            code = 404
+            print(code)
+            return HTTPResponse(code, body)
+        if (not path):
+            path = '/'
+        payload = 'GET '+path+' HTTP/1.1\r\n'
+        payload += 'HOST: '+route+'\r\n'
+        payload += 'Accept: */* \r\n'
+        payload += '\r\n'
+        self.sendall(payload)
+        
+        returnValues = self.recvall()
+        self.close()
+        body = returnValues
+    
+        if 'HTTP/1.1 ' in returnValues:
+            index = returnValues.index('HTTP/1.1 ')
+            if index < 10:
+                code = int(returnValues[index+9:index+12])
+        elif '404' in returnValues:
+            code = 404
+        elif '200' in returnValues:
+            code = 200
+        elif '301' in returnValues:
+            code = 301
+            
+        index1 = body.index('\r\n\r\n')
+        index2 = index1 + 4
+        body = body[index2:]
+        if code != 404:
+            print(body)
         return HTTPResponse(code, body)
 
     def POST(self, url, args=None):
-        code = 500
-        body = ""
+        body = ''
+        if '//' in url:
+            addr = urllib.parse.urlparse(url)
+            route = addr.netloc
+            if ':' in route:
+                route = route[:route.index(':')]
+            path = addr.path
+            if addr.port:
+                port = addr.port
+            else:
+                port = 80
+        else:
+            host = get_remote_ip(url)
+            route = url
+            port = 80
+            path = ''
+        try:
+            self.connect(route,port)
+        except Exception:
+            code = 404
+            print(code)
+            return HTTPResponse(code, body)
+        if (not path):
+            path = '/'
+        data = ''
+        if args:
+            for arg in args:
+                data = data +'&'+ arg +'='+ args[arg]
+            data = data[1:]
+        payload = 'POST '+path+' HTTP/1.1\r\n'
+        payload += 'HOST: '+route+'\r\n'
+        payload += 'Content-Type: application/x-www-form-urlencoded'
+        payload += 'Accept: */* \r\n'
+        payload += 'Content-Length: '+str(len(data))
+        payload += '\r\n\r\n'
+        payload += data+'\r\n\r\n'
+        #print('---------------------------')
+        #print(payload+'\n\n')
+        self.sendall(payload)
+        
+        returnValues = self.recvall()
+        self.sendall(data)
+        self.close()
+        body = returnValues
+    
+        if 'HTTP/1.1 ' in returnValues:
+            index = returnValues.index('HTTP/1.1 ')
+            if index < 10:
+                code = int(returnValues[index+9:index+12])
+        elif '404' in returnValues:
+            code = 404
+        elif '200' in returnValues:
+            code = 200
+        elif '301' in returnValues:
+            code = 301
+        else:
+            code = 404
+        index1 = body.index('\r\n\r\n')
+        index2 = index1 + 4
+        body = body[index2:]
+        if code != 404:
+            print(body)
         return HTTPResponse(code, body)
 
     def command(self, url, command="GET", args=None):
